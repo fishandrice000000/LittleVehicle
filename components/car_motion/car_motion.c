@@ -90,3 +90,8 @@ void Motion_Ctrl_State(uint8_t state, float speed)
         break;
     }
 }
+
+void Motion_Init(void)
+{
+    Motor_Init();
+}
