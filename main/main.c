@@ -16,6 +16,7 @@
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 #include <rmw_microros/rmw_microros.h>
+#include <rcl/init_options.h> // <--- 新增的头文件
 
 #include "geometry_msgs/msg/twist.h"
 
@@ -32,7 +33,7 @@
 
 // microROS Agent配置 (运行Agent的电脑IP)
 #define MICRO_ROS_AGENT_IP "192.168.151.32"
-#define MICRO_ROS_AGENT_PORT 8888
+#define MICRO_ROS_AGENT_PORT "8888"
 
 // ================================================================= //
 // ================================================================= //
@@ -76,9 +77,19 @@ void micro_ros_task(void *arg)
 {
     ESP_LOGI(TAG, "micro-ROS task started.");
 
-    // 配置 microROS
     allocator = rcl_get_default_allocator();
-    RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
+
+    // 创建初始化选项
+    rclc_support_t support;
+    rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
+    RCCHECK(rcl_init_options_init(&init_options, allocator));
+
+    // 设置 UDP 传输
+    rmw_init_options_t* rmw_init_options = rcl_init_options_get_rmw_init_options(&init_options);
+    RCCHECK(rmw_uros_options_set_udp_address(MICRO_ROS_AGENT_IP, MICRO_ROS_AGENT_PORT, rmw_init_options));
+
+    // 使用自定义选项初始化 support
+    RCCHECK(rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator));
 
     // 创建一个节点，名称为 "esp32_car_node"
     RCCHECK(rclc_node_init_default(&node, "esp32_car_node", "", &support));
@@ -125,12 +136,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
         
-        // IP地址获取成功，配置microROS Agent并启动任务
-        rmw_uros_set_custom_transport(
-            true,
-            (void *) MICRO_ROS_AGENT_IP,
-            MICRO_ROS_AGENT_PORT
-        );
+        // IP地址获取成功，启动 micro-ROS 任务
         xTaskCreate(micro_ros_task, "micro_ros_task", 16000, NULL, 5, NULL);
     }
 }
