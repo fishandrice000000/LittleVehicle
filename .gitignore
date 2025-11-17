@@ -1,3 +1,2 @@
 build
-components/micro_ros_espidf_component
-.vscode
+.vscode/
