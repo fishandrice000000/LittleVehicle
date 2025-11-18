@@ -1,2 +1,5 @@
 build
 .vscode/
+*.pyc
+logs/
+*.log
