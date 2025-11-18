@@ -1,4 +1,4 @@
-# esp32_car_control/base_motion.py
+# esp32_vehicle_control/base_motion.py
 import time
 import math
 from typing import List, Tuple, Optional
@@ -23,10 +23,17 @@ class BaseMotionNode(Node):
     ESP32 小车的高层运动控制封装节点。
 
     提供的主要接口：
+      - wait_for_odom(): 等待 /odom 准备好
       - move_for(vx, wz, duration): 以给定线速度/角速度跑一段时间（不依赖里程计）
       - move_distance(distance, speed): 走指定距离（依赖 /odom）
       - rotate_angle(angle_rad, angular_speed): 转指定角度（依赖 /odom）
       - follow_waypoints(waypoints): 按序列点依次走（简单版本）
+
+    使用方式（示例）：
+        node = BaseMotionNode()
+        node.wait_for_odom()
+        node.move_distance(0.5, speed=0.25)
+        node.rotate_angle(1.57, angular_speed=0.8)
     """
 
     def __init__(self,
@@ -49,14 +56,32 @@ class BaseMotionNode(Node):
     def _odom_callback(self, msg: Odometry):
         self._last_odom = msg
 
-    def _wait_for_odom(self, timeout_sec: float = 2.0) -> bool:
+    def _wait_for_odom(self, timeout_sec: float = 5.0) -> bool:
         """
         等待第一次 /odom 消息到来，超时返回 False。
+        内部使用；真正对外建议用 wait_for_odom()
         """
         start = time.time()
-        while rclpy.ok() and self._last_odom is None and (time.time() - start) < timeout_sec:
+        while (rclpy.ok()
+               and self._last_odom is None
+               and (time.time() - start) < timeout_sec):
             rclpy.spin_once(self, timeout_sec=0.1)
-        return self._last_odom is not None
+
+        if self._last_odom is None:
+            topics = self.get_topic_names_and_types()
+            self.get_logger().error(
+                f'No odom within {timeout_sec}s. Current topics: {topics}'
+            )
+            return False
+
+        return True
+
+    def wait_for_odom(self, timeout_sec: float = 5.0) -> bool:
+        """
+        对外暴露的等待 /odom 接口。
+        建议在执行任何依赖里程计的动作前先调用一次。
+        """
+        return self._wait_for_odom(timeout_sec=timeout_sec)
 
     def _publish_twist(self, vx: float, wz: float):
         msg = Twist()
@@ -64,11 +89,29 @@ class BaseMotionNode(Node):
         msg.angular.z = wz
         self.cmd_pub.publish(msg)
 
-    def stop(self):
+    def stop(self, hold_time: float = 0.3, rate_hz: float = 20.0):
         """
-        立即发送 0 速度。
+        发送一段时间的零速度指令，增加可靠停止的概率。
+
+        hold_time: 持续时间（秒）
+        rate_hz  : 发布频率（Hz）
         """
-        self._publish_twist(0.0, 0.0)
+        msg = Twist()
+        msg.linear.x = 0.0
+        msg.angular.z = 0.0
+
+        dt = 1.0 / rate_hz
+        end = time.time() + hold_time
+
+        self.get_logger().info(
+            f'[stop] publish zero cmd for {hold_time:.2f}s at {rate_hz:.1f}Hz'
+        )
+
+        while rclpy.ok() and time.time() < end:
+            self.cmd_pub.publish(msg)
+            # 保持节点处理其它回调的能力
+            rclpy.spin_once(self, timeout_sec=0.0)
+            time.sleep(dt)
 
     # ========== 高层 API 1：按时间运动（不依赖里程计） ==========
 
@@ -120,7 +163,7 @@ class BaseMotionNode(Node):
         distance > 0: 向前；distance < 0: 向后。
         speed: 标称线速度大小（m/s），符号由 distance 决定。
         """
-        if wait_odom and not self._wait_for_odom():
+        if wait_odom and not self._wait_for_odom(timeout_sec=5.0):
             self.get_logger().error('[move_distance] No odom received, abort')
             return
 
@@ -177,7 +220,7 @@ class BaseMotionNode(Node):
         angle_rad > 0: 左转；angle_rad < 0: 右转。
         angular_speed: 角速度大小（rad/s），符号由 angle_rad 决定。
         """
-        if wait_odom and not self._wait_for_odom():
+        if wait_odom and not self._wait_for_odom(timeout_sec=5.0):
             self.get_logger().error('[rotate_angle] No odom received, abort')
             return
 
@@ -242,18 +285,20 @@ class BaseMotionNode(Node):
 
         waypoints: [(x1, y1), (x2, y2), ...]，单位 m
         """
-        if not self._wait_for_odom():
+        if not self._wait_for_odom(timeout_sec=5.0):
             self.get_logger().error('[follow_waypoints] No odom received, abort')
             return
 
         for idx, (tx, ty) in enumerate(waypoints):
-            self.get_logger().info(f'[follow_waypoints] Go to waypoint {idx}: ({tx:.3f}, {ty:.3f})')
+            self.get_logger().info(
+                f'[follow_waypoints] Go to waypoint {idx}: ({tx:.3f}, {ty:.3f})'
+            )
 
-            # 读取当前位姿
             if self._last_odom is None:
                 self.get_logger().error('[follow_waypoints] odom lost, abort')
                 return
 
+            # 当前位姿
             start = self._last_odom
             px = start.pose.pose.position.x
             py = start.pose.pose.position.y
@@ -275,7 +320,6 @@ class BaseMotionNode(Node):
 
             # 再直线走过去
             distance = math.hypot(dx, dy)
-            # 留一点富余，靠容差终止
             self.move_distance(distance, speed=forward_speed, wait_odom=True)
 
             # 简单检查是否在容差范围内
@@ -284,7 +328,9 @@ class BaseMotionNode(Node):
                 continue
             cur = self._last_odom.pose.pose.position
             err = math.hypot(cur.x - tx, cur.y - ty)
-            self.get_logger().info(f'[follow_waypoints] waypoint {idx} reached, pos_err={err:.3f}m')
+            self.get_logger().info(
+                f'[follow_waypoints] waypoint {idx} reached, pos_err={err:.3f}m'
+            )
 
         self.stop()
         self.get_logger().info('[follow_waypoints] all waypoints done')
