@@ -334,3 +334,65 @@ class BaseMotionNode(Node):
 
         self.stop()
         self.get_logger().info('[follow_waypoints] all waypoints done')
+
+    # ========== 高层 API 5：曲线运动 ==========
+
+    def move_arc(self,
+                 radius: float,
+                 distance: float,
+                 speed: float = 0.2,
+                 rate_hz: float = 50.0,
+                 wait_odom: bool = True):
+        """
+        沿着一个半径为 radius 的圆形轨迹行驶指定的距离（m）。
+        
+        radius: 圆的半径（m），正值代表左转，负值代表右转
+        distance: 沿轨迹行驶的距离（m），正值代表前进，负值代表后退
+        speed: 线速度（m/s），符号由 distance 决定
+        """
+        if wait_odom and not self._wait_for_odom(timeout_sec=5.0):
+            self.get_logger().error('[move_arc] No odom received, abort')
+            return
+
+        if self._last_odom is None:
+            self.get_logger().error('[move_arc] No odom at all, abort')
+            return
+
+        # 起点坐标
+        start_odom = self._last_odom
+        sx = start_odom.pose.pose.position.x
+        sy = start_odom.pose.pose.position.y
+
+        direction = 1.0 if distance >= 0.0 else -1.0
+        speed = abs(speed) * direction
+        target_dist = abs(distance)
+
+        # 计算角速度
+        angular_speed = speed / radius
+
+        dt = 1.0 / rate_hz
+
+        self.get_logger().info(
+            f'[move_arc] radius={radius:.3f}m, distance={distance:.3f}m, speed={speed:.3f}m/s, angular_speed={angular_speed:.3f}rad/s'
+        )
+
+        while rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.0)
+            if self._last_odom is None:
+                self.get_logger().warn('[move_arc] no odom yet, keep waiting')
+                time.sleep(dt)
+                continue
+
+            cur = self._last_odom.pose.pose.position
+            dx = cur.x - sx
+            dy = cur.y - sy
+            traveled = math.hypot(dx, dy)
+
+            if traveled >= target_dist:
+                break
+
+            self._publish_twist(speed, angular_speed)
+            time.sleep(dt)
+
+        self.stop()
+        self.get_logger().info('[move_arc] done, stop sent')
