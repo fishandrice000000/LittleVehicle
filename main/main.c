@@ -80,6 +80,9 @@ static float odom_x = 0.0f;        // 小车在平面上的 x 位置（m）
 static float odom_y = 0.0f;        // 小车在平面上的 y 位置（m）
 static float odom_theta = 0.0f;    // 小车朝向 yaw 角（rad）
 
+// ===== cmd_vel 看门狗辅助变量 =====
+static int64_t last_cmd_time_us = 0;         // 最近一次收到 /cmd_vel 的时间（微秒，用于看门狗超时停车）
+
 // ============================================================================
 // 日志辅助函数：发布 rcl_interfaces::msg::Log 到 /rosout
 // ============================================================================
@@ -148,6 +151,9 @@ void cmd_vel_subscription_callback(const void *msgin)
 
     PUBLISH_LOG_INFO(rcl_node_get_name(&node), "接收到速度指令 Vx: %.2f, Wz: %.2f", linear_velocity_x, angular_velocity_z);
 
+    // 记录最近一次收到 /cmd_vel 的时间（用于看门狗超时停车）
+    last_cmd_time_us = esp_timer_get_time();
+
     // 调用小车高层运动控制接口：差速模型封装在 Motion_Ctrl 内部
     Motion_Ctrl(linear_velocity_x, 0, angular_velocity_z);
 }
@@ -163,6 +169,7 @@ void cmd_vel_subscription_callback(const void *msgin)
 //   5. 在 while(1) 中：
 //      - 轮询 executor 处理 ROS 事件
 //      - 从编码器读取速度、积分位姿，周期性发布 /odom
+//      - 检查 /cmd_vel 看门狗超时，必要时主动停止小车
 // ============================================================================
 void micro_ros_task(void *arg)
 {
@@ -274,6 +281,7 @@ void micro_ros_task(void *arg)
     // 主循环：
     //   - 处理 ROS 通讯事件
     //   - 周期性读取车体速度，积分位姿，发布 /odom
+    //   - 检查 /cmd_vel 看门狗超时，必要时主动停止小车
     // =====================================================================
     while (1)
     {
@@ -341,6 +349,18 @@ void micro_ros_task(void *arg)
 
         RCSOFTCHECK(rcl_publish(&odom_publisher, &odom_msg, NULL));
         // ------------------ 里程计处理结束 ------------------------
+
+        // ------------------ /cmd_vel 看门狗：超时自动刹车 ---------
+        // 例如 300ms 内没有收到新的 /cmd_vel，就认为上位机失联，主动停车
+        const int64_t CMD_VEL_TIMEOUT_US = 300000; // 0.3s
+        if (last_cmd_time_us != 0) {
+            int64_t no_cmd_duration = now_us - last_cmd_time_us;
+            if (no_cmd_duration > CMD_VEL_TIMEOUT_US) {
+                // 超时未收到新指令，主动停车（刹车停止）
+                Motion_Stop(STOP_BRAKE);
+            }
+        }
+        // ------------------ 看门狗检查结束 ------------------------
 
         usleep(10000); // 10ms 轻量延时，避免占满 CPU
     }
