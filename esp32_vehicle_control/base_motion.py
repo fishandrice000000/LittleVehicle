@@ -338,17 +338,20 @@ class BaseMotionNode(Node):
     # ========== 高层 API 5：曲线运动 ==========
 
     def move_arc(self,
-                 radius: float,
-                 distance: float,
-                 speed: float = 0.2,
-                 rate_hz: float = 50.0,
-                 wait_odom: bool = True):
+                radius: float,
+                distance: float,
+                speed: float = 0.2,
+                rate_hz: float = 50.0,
+                wait_odom: bool = True):
         """
-        沿着一个半径为 radius 的圆形轨迹行驶指定的距离（m）。
-        
-        radius: 圆的半径（m），正值代表左转，负值代表右转
-        distance: 沿轨迹行驶的距离（m），正值代表前进，负值代表后退
-        speed: 线速度（m/s），符号由 distance 决定
+        沿着半径为 radius 的圆弧行驶给定弧长 distance（单位 m）。
+
+        radius > 0 : 左转弧线
+        radius < 0 : 右转弧线
+        distance > 0 : 前进
+        distance < 0 : 后退
+
+        注意：distance 是“沿轨迹的弧长”，不是起点到终点的直线距离。
         """
         if wait_odom and not self._wait_for_odom(timeout_sec=5.0):
             self.get_logger().error('[move_arc] No odom received, abort')
@@ -358,41 +361,67 @@ class BaseMotionNode(Node):
             self.get_logger().error('[move_arc] No odom at all, abort')
             return
 
-        # 起点坐标
-        start_odom = self._last_odom
-        sx = start_odom.pose.pose.position.x
-        sy = start_odom.pose.pose.position.y
+        if abs(radius) < 1e-6:
+            self.get_logger().error('[move_arc] radius too small, abort')
+            return
 
-        direction = 1.0 if distance >= 0.0 else -1.0
-        speed = abs(speed) * direction
-        target_dist = abs(distance)
+        # 线速度方向由 distance 决定
+        dir_lin = 1.0 if distance >= 0.0 else -1.0
+        vx_cmd = abs(speed) * dir_lin
 
-        # 计算角速度
-        angular_speed = speed / radius
+        # 角速度方向由半径符号决定（v / R）
+        wz_cmd = vx_cmd / radius
 
         dt = 1.0 / rate_hz
+        target_arc = abs(distance)
+        traveled_arc = 0.0
+
+        # 用当前位姿作为“上一点”，后续每次累加两次 odom 之间的直线间距来近似弧长
+        last_pose = self._last_odom.pose.pose.position
+        last_x = last_pose.x
+        last_y = last_pose.y
+
+        # 保险起见，加一个超时：按理论时间 * 2
+        max_time = 2.0 * target_arc / (abs(vx_cmd) + 1e-3)
+        start_time = time.time()
 
         self.get_logger().info(
-            f'[move_arc] radius={radius:.3f}m, distance={distance:.3f}m, speed={speed:.3f}m/s, angular_speed={angular_speed:.3f}rad/s'
+            f'[move_arc] radius={radius:.3f}m, distance={distance:.3f}m, '
+            f'vx={vx_cmd:.3f}m/s, wz={wz_cmd:.3f}rad/s'
         )
 
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.0)
+
             if self._last_odom is None:
                 self.get_logger().warn('[move_arc] no odom yet, keep waiting')
                 time.sleep(dt)
                 continue
 
-            cur = self._last_odom.pose.pose.position
-            dx = cur.x - sx
-            dy = cur.y - sy
-            traveled = math.hypot(dx, dy)
+            cur_pose = self._last_odom.pose.pose.position
+            cur_x = cur_pose.x
+            cur_y = cur_pose.y
 
-            if traveled >= target_dist:
+            # 增量位移，当做弧长的小段
+            ds = math.hypot(cur_x - last_x, cur_y - last_y)
+            traveled_arc += ds
+
+            last_x, last_y = cur_x, cur_y
+
+            if traveled_arc >= target_arc:
                 break
 
-            self._publish_twist(speed, angular_speed)
+            # 超时保护，避免死循环
+            if (time.time() - start_time) > max_time:
+                self.get_logger().warn(
+                    f'[move_arc] timeout, traveled_arc={traveled_arc:.3f} < target={target_arc:.3f}'
+                )
+                break
+
+            self._publish_twist(vx_cmd, wz_cmd)
             time.sleep(dt)
 
         self.stop()
-        self.get_logger().info('[move_arc] done, stop sent')
+        self.get_logger().info(
+            f'[move_arc] done, traveled_arc={traveled_arc:.3f}, target={target_arc:.3f}'
+        )
