@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdarg.h> 
-#include <math.h>   // 用于里程计姿态计算（cosf/sinf）
+#include <math.h> 
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -12,7 +12,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
-#include "esp_timer.h"   // 用于获取微秒级时间戳（里程计积分用）
+#include "esp_timer.h"
 
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
@@ -23,9 +23,8 @@
 
 #include "geometry_msgs/msg/twist.h"
 #include "rcl_interfaces/msg/log.h" 
-#include "nav_msgs/msg/odometry.h"  // 里程计：Odometry 消息类型
+#include "nav_msgs/msg/odometry.h" 
 
-// 小车运动控制头文件（包含运动学与电机控制接口）
 #include "car_motion.h"
 
 // ================================================================= //
@@ -49,6 +48,21 @@
 // micro-ROS连接重试配置
 #define MAX_RETRY_ATTEMPTS   5
 #define RETRY_DELAY_MS     2000
+
+// ================================================================= //
+// ==================== 里程计缩放（经验修正） ===================== //
+// ================================================================= //
+//
+// 说明：根据实测：现实中推车约 1m 时，/odom 的位移约 10m，
+//      因此在里程计算中给线速度乘一个经验系数约 0.1，使
+//      发布出的 /odom 更接近真实世界，以便上层运动脚本使用。
+//      后续如果做了更精细的标定，可以把这个值继续微调，
+//      理想状态是收敛到 1.0f。
+//
+#define ODOM_LINEAR_SCALE   (0.10f)
+
+// 角速度缩放：根据实测转角进行标定，初始取 0.5f，可根据 目标角/实际角 调整
+#define ODOM_ANGULAR_SCALE  (0.50f)
 
 // ================================================================= //
 // ================================================================= //
@@ -303,8 +317,11 @@ void micro_ros_task(void *arg)
         // 1. 通过已有接口获取车体速度（Vx, Wz）
         car_motion_t car;
         Motion_Get_Speed(&car);
-        float vx = car.Vx;    // 车体坐标系前进方向速度 m/s
-        float wz = car.Wz;    // 绕 Z 轴角速度 rad/s
+
+        // 注意：这里对线速度做经验缩放，使 /odom 的位移更接近真实世界。
+        //      角速度同样做经验缩放，根据“目标角度/实际角度”进行标定。
+        float vx = car.Vx * ODOM_LINEAR_SCALE;      // 车体坐标系前进方向速度 m/s（带缩放）
+        float wz = car.Wz * ODOM_ANGULAR_SCALE;     // 绕 Z 轴角速度 rad/s（带缩放）
 
         // 2. 简单双轮差速里程计积分（在 odom 平面坐标系中积分）
         odom_theta += wz * dt;
@@ -340,6 +357,7 @@ void micro_ros_task(void *arg)
         odom_msg.pose.pose.orientation.w = cz;
 
         // 线速度/角速度（车体坐标系）
+        // 这里同样使用缩放后的 vx/wz，以保证 /odom 中 pose 和 twist 一致
         odom_msg.twist.twist.linear.x = vx;
         odom_msg.twist.twist.linear.y = 0.0f;
         odom_msg.twist.twist.linear.z = 0.0f;
