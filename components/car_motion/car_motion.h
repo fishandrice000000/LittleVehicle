@@ -8,13 +8,11 @@ extern "C" {
 #include "motor.h"
 
 // 小车底盘轮子间距，单位:m
-// Car chassis wheel spacing, unit :m
 #define ROBOT_WIDTH                  (0.135f)
 #define ROBOT_LENGTH                 (0.095f)
 
-// 小车上下轮子、左右轮子间距和的一半。
-// Half of the distance between the upper and lower wheels and the left and right wheels of the car.
-#define ROBOT_APB                    (0.115f)
+// 小车左右后驱动轮间距和的一半。
+#define ROBOT_APB                    (ROBOT_WIDTH / 2.0f)
 
 
 #define ROBOT_SPIN_SCALE             (5.0f)
