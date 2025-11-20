@@ -100,7 +100,7 @@ static void Motor_Task(void *arg)
     while (1)
     {
         Motor_PID_Ctrl();
-        vTaskDelayUntil(&lastWakeTime, MOTOR_PID_PERIOD);
+        vTaskDelayUntil(&lastWakeTime, pdMS_TO_TICKS(MOTOR_PID_PERIOD));
     }
 
     Motor_Stop(STOP_BRAKE);
