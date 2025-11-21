@@ -8,11 +8,17 @@ extern "C" {
 #include "motor.h"
 
 // 小车底盘轮子间距，单位:m
-#define ROBOT_WIDTH                  (0.135f)
+#define ROBOT_WIDTH_PHYSICAL         (0.135f)
 #define ROBOT_LENGTH                 (0.095f)
 
+// 经验系数进行缩放
+#define ROBOT_WIDTH_SCALE            (0.857f)
+
+// 运动学处理中实际使用，经系数缩放后的轮间距
+#define ROBOT_WIDTH_KINEMATIC        (ROBOT_WIDTH_PHYSICAL * ROBOT_WIDTH_SCALE)
+
 // 小车左右后驱动轮间距和的一半。
-#define ROBOT_APB                    (ROBOT_WIDTH / 2.0f)
+#define ROBOT_APB                    (ROBOT_WIDTH_KINEMATIC / 2.0f)
 
 
 #define ROBOT_SPIN_SCALE             (5.0f)

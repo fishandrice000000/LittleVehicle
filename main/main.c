@@ -49,24 +49,6 @@
 #define MAX_RETRY_ATTEMPTS   5
 #define RETRY_DELAY_MS     2000
 
-// ================================================================= //
-// ==================== 里程计缩放（经验修正） ===================== //
-// ================================================================= //
-//
-// 说明：根据实测：现实中推车约 1m 时，/odom 的位移约 10m，
-//      因此在里程计算中给线速度乘一个经验系数约 0.1，使
-//      发布出的 /odom 更接近真实世界，以便上层运动脚本使用。
-//      后续如果做了更精细的标定，可以把这个值继续微调，
-//      理想状态是收敛到 1.0f。
-//
-#define ODOM_LINEAR_SCALE   (0.10f)
-
-// 角速度缩放：根据实测转角进行标定，初始取 0.5f，可根据 目标角/实际角 调整
-#define ODOM_ANGULAR_SCALE  (0.50f)
-
-// ================================================================= //
-// ================================================================= //
-
 static const char *TAG = "MAIN";
 
 // ===== micro-ROS 错误处理宏（统一检查返回值并输出日志） =====
@@ -318,10 +300,8 @@ void micro_ros_task(void *arg)
         car_motion_t car;
         Motion_Get_Speed(&car);
 
-        // 注意：这里对线速度做经验缩放，使 /odom 的位移更接近真实世界。
-        //      角速度同样做经验缩放，根据“目标角度/实际角度”进行标定。
-        float vx = car.Vx * ODOM_LINEAR_SCALE;      // 车体坐标系前进方向速度 m/s（带缩放）
-        float wz = car.Wz * ODOM_ANGULAR_SCALE;     // 绕 Z 轴角速度 rad/s（带缩放）
+        float vx = car.Vx;      // 车体坐标系前进方向速度 m/s
+        float wz = car.Wz;     // 绕 Z 轴角速度 rad/s
 
         // 2. 简单双轮差速里程计积分（在 odom 平面坐标系中积分）
         odom_theta += wz * dt;
@@ -369,8 +349,8 @@ void micro_ros_task(void *arg)
         // ------------------ 里程计处理结束 ------------------------
 
         // ------------------ /cmd_vel 看门狗：超时自动刹车 ---------
-        // 例如 300ms 内没有收到新的 /cmd_vel，就认为上位机失联，主动停车
-        const int64_t CMD_VEL_TIMEOUT_US = 300000; // 0.3s
+        // 例如 100ms 内没有收到新的 /cmd_vel，就认为上位机失联，主动停车
+        const int64_t CMD_VEL_TIMEOUT_US = 100000; // 0.1s
         if (last_cmd_time_us != 0) {
             int64_t no_cmd_duration = now_us - last_cmd_time_us;
             if (no_cmd_duration > CMD_VEL_TIMEOUT_US) {
