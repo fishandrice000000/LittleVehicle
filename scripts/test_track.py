@@ -2,11 +2,23 @@
 import rclpy
 import math
 import time
+import sys
+import os
+import argparse
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(script_dir, '..'))
+sys.path.append(project_root)
 from esp32_vehicle_control.base_motion import BaseMotionNode
 
-# 测试轨道：直线 0.5m -> 圆弧半圈 (R=0.5m) -> 直线 0.5m -> 圆弧半圈 (R=0.5m) -> 回到起点。全程 0.5m/s。
-
 def main():
+    # === 解析命令行参数 ===
+    parser = argparse.ArgumentParser(description='Test track (oval) motion.')
+    parser.add_argument('-l', '--length', type=float, default=0.5, help='Length of straight section in meters (default: 0.5)')
+    parser.add_argument('-r', '--radius', type=float, default=0.5, help='Radius of turn in meters (default: 0.5)')
+    parser.add_argument('-s', '--speed', type=float, default=0.25, help='Speed in m/s (default: 0.25)')
+    args = parser.parse_args()
+
     rclpy.init()
     node = BaseMotionNode()
     
@@ -16,22 +28,23 @@ def main():
             print("Error: No Odom.")
             return
 
-        speed = 0.5
-        radius = 0.5
-        straight_len = 0.5
+        speed = args.speed
+        radius = args.radius
+        straight_len = args.length
         # 半圆弧长 = pi * r
-        semi_circle_len = math.pi * radius
+        semi_circle_len = math.pi * abs(radius)
 
-        print("=== Step 1: Straight 0.5m ===")
+        print(f"Config: Speed={speed}m/s, Straight={straight_len}m, Radius={radius}m")
+
+        print("=== Step 1: Straight ===")
         node.move_distance(distance=straight_len, speed=speed)
-        time.sleep(0.5) # 动作之间稍作停顿，让惯性消除（可选）
+        time.sleep(0.5)
 
         print("=== Step 2: U-Turn (Semi-circle) ===")
-        # radius=0.5 (左转)
         node.move_arc(radius=radius, distance=semi_circle_len, speed=speed)
         time.sleep(0.5)
 
-        print("=== Step 3: Straight 0.5m (Returning) ===")
+        print("=== Step 3: Straight (Returning) ===")
         node.move_distance(distance=straight_len, speed=speed)
         time.sleep(0.5)
 

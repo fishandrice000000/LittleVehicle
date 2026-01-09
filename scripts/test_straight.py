@@ -1,35 +1,41 @@
 #!/usr/bin/env python3
 import rclpy
-import time
+import sys
+import os
+import argparse
+
+# 添加父目录到路径以便导入模块
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(script_dir, '..'))
+sys.path.append(project_root)
 from esp32_vehicle_control.base_motion import BaseMotionNode
 
-# 测试小车以 0.5m/s 的速度直线行驶 1m。
-
 def main():
+    # === 解析命令行参数 ===
+    parser = argparse.ArgumentParser(description='Test straight line motion.')
+    parser.add_argument('-d', '--distance', type=float, default=1.0, help='Target distance in meters (default: 1.0)')
+    parser.add_argument('-s', '--speed', type=float, default=0.25, help='Target speed in m/s (default: 0.25)')
+    args = parser.parse_args()
+
     rclpy.init()
-    
-    # 初始化节点
     node = BaseMotionNode()
     
     try:
         print("Waiting for Odometry...")
-        # 必须先等待里程计数据，确保 micro-ROS 连接正常且数据已上报
         if not node.wait_for_odom(timeout_sec=10.0):
-            print("Error: Could not get Odometry data. Check micro-ROS agent connection.")
+            print("Error: Could not get Odometry data.")
             return
 
-        print("Start: Moving Straight 1.0m at 0.5m/s")
+        print(f"Start: Moving Straight {args.distance}m at {args.speed}m/s")
         
-        # 调用 move_distance
-        # distance=1.0 (米), speed=0.5 (米/秒)
-        node.move_distance(distance=1.0, speed=0.5)
+        # 使用命令行参数
+        node.move_distance(distance=args.distance, speed=args.speed)
         
         print("Done.")
 
     except KeyboardInterrupt:
         print("Test interrupted by user.")
     finally:
-        # 确保退出时停车
         node.stop()
         node.destroy_node()
         rclpy.shutdown()

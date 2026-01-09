@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 import rclpy
 import math
+import sys
+import os
+import argparse
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(script_dir, '..'))
+sys.path.append(project_root)
 from esp32_vehicle_control.base_motion import BaseMotionNode
 
-# 测试小车以 0.5m/s 的速度沿半径为 0.5m 的圆行驶一圈。
-
 def main():
+    # === 解析命令行参数 ===
+    parser = argparse.ArgumentParser(description='Test circular motion.')
+    parser.add_argument('-r', '--radius', type=float, default=0.5, help='Circle radius in meters (default: 0.5)')
+    parser.add_argument('-s', '--speed', type=float, default=0.25, help='Linear speed in m/s (default: 0.25)')
+    args = parser.parse_args()
+
     rclpy.init()
     node = BaseMotionNode()
     
@@ -15,16 +26,15 @@ def main():
             print("Error: No Odom.")
             return
 
-        # 参数计算
-        radius = 0.5            # 半径 0.5m
-        speed = 0.5             # 线速度 0.5m/s
+        # 计算参数
+        radius = args.radius
+        speed = args.speed
         
         # 计算行驶一圈所需的弧长：L = 2 * pi * r
-        arc_length = 2 * math.pi * radius
+        arc_length = 2 * math.pi * abs(radius)
         
-        print(f"Start: Moving in a circle (R={radius}m) for {arc_length:.2f}m length")
+        print(f"Start: Moving in a circle (R={radius}m) for {arc_length:.2f}m length at {speed}m/s")
         
-        # radius > 0 代表左转圆，radius < 0 代表右转圆
         node.move_arc(radius=radius, distance=arc_length, speed=speed)
         
         print("Done.")
