@@ -13,7 +13,8 @@ extern "C" {
 // 电机转动一圈产生的脉冲数量：13*20*4
 #define MOTOR_ENCODER_CIRCLE            (1040)
 // 轮子周长，单位：mm
-#define MOTOR_WHEEL_CIRCLE              (141.4f)
+// 实际是经验系数缩放后的“抽象轮子周长”
+#define MOTOR_WHEEL_CIRCLE              (151.6f)
 // PID算法计算周期，单位：ms
 #define MOTOR_PID_PERIOD                (10)
 // 设置电机最大速度，单位：ms/s。
