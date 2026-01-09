@@ -158,10 +158,7 @@ class BaseMotionNode(Node):
                       rate_hz: float = 50.0,
                       wait_odom: bool = True):
         """
-        沿车体前进方向走指定距离（m），基于 /odom 闭环。
-
-        distance > 0: 向前；distance < 0: 向后。
-        speed: 标称线速度大小（m/s），符号由 distance 决定。
+        带减速缓冲的直线运动控制
         """
         if wait_odom and not self._wait_for_odom(timeout_sec=5.0):
             self.get_logger().error('[move_distance] No odom received, abort')
@@ -171,25 +168,28 @@ class BaseMotionNode(Node):
             self.get_logger().error('[move_distance] No odom at all, abort')
             return
 
-        # 起点坐标
+        # 记录起点
         start_odom = self._last_odom
         sx = start_odom.pose.pose.position.x
         sy = start_odom.pose.pose.position.y
 
         direction = 1.0 if distance >= 0.0 else -1.0
-        speed = abs(speed) * direction
+        target_speed = abs(speed)
         target_dist = abs(distance)
+
+        # === 配置减速参数 ===
+        DECEL_DIST = 0.3      # 在距离终点 0.3米 处开始减速
+        MIN_SPEED = 0.1       # 最小行驶速度 (太慢电机可能不转)
 
         dt = 1.0 / rate_hz
 
         self.get_logger().info(
-            f'[move_distance] distance={distance:.3f}m, speed={speed:.3f}m/s'
+            f'[move_distance] target={distance:.3f}m, max_speed={target_speed:.3f}m/s'
         )
 
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.0)
             if self._last_odom is None:
-                self.get_logger().warn('[move_distance] no odom yet, keep waiting')
                 time.sleep(dt)
                 continue
 
@@ -197,11 +197,24 @@ class BaseMotionNode(Node):
             dx = cur.x - sx
             dy = cur.y - sy
             traveled = math.hypot(dx, dy)
+            
+            remaining = target_dist - traveled
 
-            if traveled >= target_dist:
+            # 到达目标
+            if remaining <= 0:
                 break
 
-            self._publish_twist(speed, 0.0)
+            # === 核心修改：简单的线性减速逻辑 ===
+            current_cmd_speed = target_speed
+            
+            if remaining < DECEL_DIST:
+                # 速度随距离线性递减： v = v_max * (剩余距离 / 减速距离)
+                # 但不能低于最小速度，否则最后一点挪不动
+                ramp_speed = target_speed * (remaining / DECEL_DIST)
+                current_cmd_speed = max(MIN_SPEED, ramp_speed)
+
+            # 发送速度指令
+            self._publish_twist(current_cmd_speed * direction, 0.0)
             time.sleep(dt)
 
         self.stop()
