@@ -3,3 +3,5 @@ build
 *.pyc
 logs/
 *.log
+sdkconfig
+sdkconfig.old
