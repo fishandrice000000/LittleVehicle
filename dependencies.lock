@@ -22,10 +22,10 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.2.6
+    version: 5.1.1
 direct_dependencies:
 - espressif/bdc_motor
 - espressif/pid_ctrl
-manifest_hash: 611978d6151db912d14213fa20626835bb01fee49fe96acf45a9c7a2ecb1123c
+manifest_hash: bffc80f2420cff2e7289de85c07fce452b0b9261708aaba4fd32db47b5899f08
 target: esp32s3
 version: 2.0.0
