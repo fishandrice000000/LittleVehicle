@@ -6,7 +6,7 @@ services:
   # --------------------------------------------------------
   microros-agent:
     image: microros/micro-ros-agent:humble
-    container_name: uros_agent
+    container_name: microros-agent
     network_mode: host # 必须使用 host 网络，保证 DDS 能互相发现
     restart: unless-stopped
     command: udp4 --port 8888 -v6
@@ -26,3 +26,5 @@ services:
       # 请确保左侧路径是你宿主机的正确代码路径
       - /opt/build_cars_uestc/LittleVehicle:/workspace
     restart: unless-stopped
+    tty: true
+    stdin_open: true
