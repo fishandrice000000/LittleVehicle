@@ -1,38 +1,54 @@
-# 必须使用 v5.2 甚至更高版本，以确保底层是 Ubuntu 22.04
-FROM espressif/idf:v5.2.1
+# --------------------------------------------------------
+# 基础镜像: ROS 2 Humble Desktop (包含 RViz2 和相关的 GUI 依赖)
+# --------------------------------------------------------
+FROM osrf/ros:humble-desktop
 
+# 设置非交互式安装，防止 tzdata 等包安装时卡住
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. 基础系统设置 (ROS 2 强依赖正确的 locale 和 tzdata 设置)
+# --------------------------------------------------------
+# 1. 安装基础工具、ESP-IDF 前置依赖以及 Gazebo 相关的 ROS 包
+# --------------------------------------------------------
 RUN apt-get update && apt-get install -y \
-    locales curl software-properties-common tzdata \
-    && locale-gen en_US en_US.UTF-8 \
-    && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
-    && ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
-    && dpkg-reconfigure --frontend noninteractive tzdata \
-    && rm -rf /var/lib/apt/lists/*
-ENV LANG=en_US.UTF-8
-
-# 2. 添加 ROS 2 官方 GPG 密钥和 apt 源 (明确指定 jammy)
-RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu jammy main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null
-
-# 3. 安装 ROS 2 Humble (如果不需要 Rviz/Gazebo，可以将 desktop 换成 ros-humble-ros-base 以大幅缩小镜像体积) 
-RUN apt-get update && apt-get install -y \
-    ros-humble-desktop \
-    python3-colcon-common-extensions \
-    python3-pip \
-    libusb-1.0-0 \
-    udev \
+    git wget flex bison gperf python3 python3-pip python3-venv \
+    cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0 \
+    ros-humble-gazebo-ros-pkgs ros-humble-xacro \
+    iputils-ping net-tools usbutils \
+    nano vim curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 4. 在 ESP-IDF 的 Python 虚拟环境中注入 micro-ROS 编译依赖
-# 注意：官方 espressif/idf 镜像中，IDF_PATH 默认配置为 /opt/esp/idf
-RUN bash -c "source /opt/esp/idf/export.sh && pip3 install catkin_pkg lark-parser empy==3.3.4 colcon-common-extensions"
+# --------------------------------------------------------
+# 2. 安装与配置 ESP-IDF 工具链
+# --------------------------------------------------------
+ENV IDF_PATH=/opt/esp/idf
+ENV IDF_TOOLS_PATH=/opt/esp/tools
 
-# 5. 配置环境变量别名
+RUN mkdir -p /opt/esp && \
+    cd /opt/esp && \
+    # 克隆 ESP-IDF (此处选择 v5.1.2，是当前 micro-ROS 兼容性极好且稳定的版本)
+    git clone -b v5.1.2 --recursive https://github.com/espressif/esp-idf.git idf 
+
+RUN cd /opt/esp/idf && \
+    # 运行安装脚本 (all 表示安装支持所有芯片的工具链，如 esp32, esp32s3, esp32c3 等)
+    ./install.sh all
+
+# --------------------------------------------------------
+# 3. 安装 micro-ROS 和 ROS2 开发可能用到的 Python 拓展
+# --------------------------------------------------------
+RUN pip3 install catkin_pkg lark-parser empy colcon-common-extensions pyserial
+
+# --------------------------------------------------------
+# 4. 配置终端环境
+# --------------------------------------------------------
+# 将 ROS 2 和 ESP-IDF 的环境变量注入到 bashrc 中
 RUN echo "source /opt/ros/humble/setup.bash" >> /root/.bashrc && \
-    echo "alias get_idf='source /opt/ros/humble/setup.bash && source /opt/esp/idf/export.sh'" >> /root/.bashrc
+    # 创建一个快捷指令 `get_idf` 用于激活 ESP-IDF 环境 (不默认激活，防止与 ROS colcon 冲突)
+    echo "alias get_idf='. /opt/esp/idf/export.sh'" >> /root/.bashrc && \
+    # 自动 source ROS 2 工作空间（假设你未来在 /workspace 编译）
+    echo "if [ -f /workspace/install/setup.bash ]; then source /workspace/install/setup.bash; fi" >> /root/.bashrc
 
+# 设置你的工作目录
 WORKDIR /workspace
+
+# 启动默认命令
 CMD ["/bin/bash"]
