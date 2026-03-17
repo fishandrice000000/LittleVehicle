@@ -18,7 +18,7 @@ services:
     build:
       context: . # 根据当前目录的 Dockerfile 构建
       network: host
-    image: little_vehicle_env:v6
+    image: little_vehicle_env:v7
     container_name: my-little-vehicle
     network_mode: host # 与 Agent 在同一网络
     privileged: true # 提权，用于无缝烧录
@@ -29,3 +29,13 @@ services:
     restart: unless-stopped
     tty: true
     stdin_open: true
+    environment:
+      - HTTP_PROXY=http://127.0.0.1:7890
+      - HTTPS_PROXY=http://127.0.0.1:7890
+      - ALL_PROXY=socks5://127.0.0.1:7890
+      - NO_PROXY=localhost,127.0.0.1,localaddress,.local
+      # 可选：让 git、apt 等工具也识别代理
+      - http_proxy=http://127.0.0.1:7890
+      - https_proxy=http://127.0.0.1:7890
+      - all_proxy=socks5://127.0.0.1:7890
+      - no_proxy=localhost,127.0.0.1,localaddress,.local
