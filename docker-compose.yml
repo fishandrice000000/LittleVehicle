@@ -17,7 +17,8 @@ services:
   esp-ros2-env:
     build:
       context: . # 根据当前目录的 Dockerfile 构建
-    image: little_vehicle_env:v5
+      network: host
+    image: little_vehicle_env:v6
     container_name: my-little-vehicle
     network_mode: host # 与 Agent 在同一网络
     privileged: true # 提权，用于无缝烧录
