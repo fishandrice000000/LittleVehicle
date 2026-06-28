@@ -265,7 +265,7 @@ class BaseMotionNode(Node):
         accumulated = 0.0
 
         while rclpy.ok():
-            rclpy.spin_once(self, timeout_sec=0.0)
+            rclpy.spin_once(self, timeout_sec=dt)
             if self._last_odom is None:
                 time.sleep(dt)
                 continue
@@ -280,7 +280,8 @@ class BaseMotionNode(Node):
             elif delta < -math.pi:
                 delta += 2.0 * math.pi
 
-            accumulated += abs(delta)
+            # 带符号累积: 朝目标方向的旋转计为正，反向震荡自动抵消
+            accumulated += delta * direction
             prev_yaw = cur_yaw
 
             if accumulated >= target_angle:
