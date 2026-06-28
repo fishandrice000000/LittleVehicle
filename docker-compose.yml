@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  # --------------------------------------------------------
+  # 服务 1：官方 micro-ROS Agent (UDP 模式)
+  # --------------------------------------------------------
+  microros-agent:
+    image: microros/micro-ros-agent:humble
+    container_name: microros-agent
+    network_mode: host # 必须使用 host 网络，保证 DDS 能互相发现
+    restart: unless-stopped
+    command: udp4 --port 8888 -v6
+
+  # --------------------------------------------------------
+  # 服务 2：你的开发与编译环境 (ESP-IDF + ROS 2 脚本环境)
+  # --------------------------------------------------------
+  esp-ros2-env:
+    build:
+      context: . # 根据当前目录的 Dockerfile 构建
+      network: host
+    image: little_vehicle_env:v8
+    container_name: my-little-vehicle
+    network_mode: host # 与 Agent 在同一网络
+    privileged: true # 提权，用于无缝烧录
+    volumes:
+      - /dev:/dev # 映射所有硬件接口 (串口)
+      # 请确保左侧路径是你宿主机的正确代码路径
+      - /opt/build_cars_uestc/LittleVehicle:/workspace
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
+    environment:
+      - HTTP_PROXY=http://127.0.0.1:7890
+      - HTTPS_PROXY=http://127.0.0.1:7890
+      - ALL_PROXY=socks5://127.0.0.1:7890
+      - NO_PROXY=localhost,127.0.0.1,localaddress,.local
+      # 可选：让 git、apt 等工具也识别代理
+      - http_proxy=http://127.0.0.1:7890
+      - https_proxy=http://127.0.0.1:7890
+      - all_proxy=socks5://127.0.0.1:7890
+      - no_proxy=localhost,127.0.0.1,localaddress,.local
