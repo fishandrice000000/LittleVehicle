@@ -230,6 +230,9 @@ class BaseMotionNode(Node):
         """
         原地旋转指定角度（rad），基于 /odom 闭环。
 
+        使用逐帧累积转角法：将每帧 yaw 的增量（已解 wrap）累加，
+        不受 yaw 在 ±π 处折叠的影响，支持任意角度（包括 ≥180°）。
+
         angle_rad > 0: 左转；angle_rad < 0: 右转。
         angular_speed: 角速度大小（rad/s），符号由 angle_rad 决定。
         """
@@ -241,9 +244,8 @@ class BaseMotionNode(Node):
             self.get_logger().error('[rotate_angle] No odom at all, abort')
             return
 
-        start_odom = self._last_odom
-        q = start_odom.pose.pose.orientation
-        start_yaw = yaw_from_quat(q.x, q.y, q.z, q.w)
+        q = self._last_odom.pose.pose.orientation
+        prev_yaw = yaw_from_quat(q.x, q.y, q.z, q.w)
 
         direction = 1.0 if angle_rad >= 0.0 else -1.0
         speed = abs(angular_speed) * direction
@@ -251,38 +253,56 @@ class BaseMotionNode(Node):
 
         dt = 1.0 / rate_hz
 
+        # 安全超时: max(10s, 2×理论最短时间)
+        max_duration = max(10.0, 2.0 * target_angle / (abs(speed) + 1e-6))
+        start_time = time.time()
+
         self.get_logger().info(
-            f'[rotate_angle] angle={angle_rad:.3f}rad, wz={speed:.3f}rad/s'
+            f'[rotate_angle] angle={angle_rad:.3f}rad ({math.degrees(angle_rad):.1f}°), '
+            f'wz={speed:.3f}rad/s'
         )
 
-        def angle_diff(a, b):
-            # 归一化到 [-pi, pi]
-            d = a - b
-            while d > math.pi:
-                d -= 2 * math.pi
-            while d < -math.pi:
-                d += 2 * math.pi
-            return abs(d)
+        accumulated = 0.0
 
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.0)
             if self._last_odom is None:
-                self.get_logger().warn('[rotate_angle] no odom yet, keep waiting')
                 time.sleep(dt)
                 continue
 
             q = self._last_odom.pose.pose.orientation
-            yaw = yaw_from_quat(q.x, q.y, q.z, q.w)
-            diff = angle_diff(yaw, start_yaw)
+            cur_yaw = yaw_from_quat(q.x, q.y, q.z, q.w)
 
-            if diff >= target_angle:
+            # 计算帧间 yaw 增量，解 ±π 折叠
+            delta = cur_yaw - prev_yaw
+            if delta > math.pi:
+                delta -= 2.0 * math.pi
+            elif delta < -math.pi:
+                delta += 2.0 * math.pi
+
+            accumulated += abs(delta)
+            prev_yaw = cur_yaw
+
+            if accumulated >= target_angle:
+                break
+
+            # 超时保护
+            if time.time() - start_time > max_duration:
+                self.get_logger().warn(
+                    f'[rotate_angle] timeout after {max_duration:.1f}s, '
+                    f'accumulated={accumulated:.3f}rad ({math.degrees(accumulated):.1f}°), '
+                    f'target={target_angle:.3f}rad'
+                )
                 break
 
             self._publish_twist(0.0, speed)
             time.sleep(dt)
 
         self.stop()
-        self.get_logger().info('[rotate_angle] done, stop sent')
+        self.get_logger().info(
+            f'[rotate_angle] done, accumulated={accumulated:.3f}rad '
+            f'({math.degrees(accumulated):.1f}°), target={target_angle:.3f}rad'
+        )
 
     # ========== 高层 API 4：简单跟随一串航点（粗糙版） ==========
 
