@@ -14,7 +14,7 @@ extern "C" {
 #define MOTOR_ENCODER_CIRCLE            (1040)
 // 轮子周长，单位：mm
 // 实际是经验系数缩放后的“抽象轮子周长”
-#define MOTOR_WHEEL_CIRCLE              (151.6f)
+#define MOTOR_WHEEL_CIRCLE              (150.8f)
 // PID算法计算周期，单位：ms
 #define MOTOR_PID_PERIOD                (10)
 // 设置电机最大速度，单位：ms/s。

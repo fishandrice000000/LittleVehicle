@@ -40,8 +40,8 @@ void Motion_Get_Speed(car_motion_t* car)
     car->Vx = (left_speed + right_speed) / 2.0f;
     car->Vy = 0; // 差速小车没有Y方向的速度
 
-    //    角速度 Wz 是左右侧速度差除以轮间距 (ROBOT_WIDTH_KINEMATIC)
-    car->Wz = (right_speed - left_speed) / ROBOT_WIDTH_KINEMATIC;
+    //    角速度 Wz = -(m1+m2-m3-m4) / (4 * ROBOT_APB)
+    car->Wz = -(speed_m1 + speed_m2 - speed_m3 - speed_m4) / 4.0f / ROBOT_APB;
 
     if(car->Wz == 0) car->Wz = 0;
 }
