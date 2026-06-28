@@ -8,6 +8,7 @@ extern "C" {
 #include "motor.h"
 
 // 小车底盘轮子间距，单位:m
+// 四轮差速底盘: 左侧(M1+M2) / 右侧(M3+M4)
 #define ROBOT_WIDTH_PHYSICAL         (0.135f)
 #define ROBOT_LENGTH                 (0.095f)
 
@@ -17,7 +18,7 @@ extern "C" {
 // 运动学处理中实际使用，经系数缩放后的轮间距
 #define ROBOT_WIDTH_KINEMATIC        (ROBOT_WIDTH_PHYSICAL * ROBOT_WIDTH_SCALE)
 
-// 小车左右后驱动轮间距和的一半。
+// 小车左右侧轮间距和的一半。
 #define ROBOT_APB                    (ROBOT_WIDTH_KINEMATIC / 2.0f)
 
 

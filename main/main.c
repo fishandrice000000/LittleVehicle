@@ -114,8 +114,8 @@ void cmd_vel_subscription_callback(const void *msgin)
 
     last_cmd_time_us = esp_timer_get_time();
 
-    // 无论是两轮还是四轮差速，ROS层接口不变
-    // 底层 car_motion.c 负责将速度分配给四个电机
+    // 四轮差速驱动: ROS层接口不变
+    // 底层 car_motion.c 负责将速度分配给四个电机 (M1+M2左侧, M3+M4右侧)
     Motion_Ctrl(linear_velocity_x, 0, angular_velocity_z);
 }
 
@@ -227,15 +227,14 @@ void micro_ros_task(void *arg)
         last_odom_time_us = now_us;
 
         // 获取车体速度
-        // 注意：如果你加装了4个编码器，需要在 car_motion.c 的这个函数里
-        // 将四轮速度融合为车体中心速度，在这里对上层依然是透明的。
+        // car_motion.c 中将四轮速度融合为车体中心速度，对上层透明。
         car_motion_t car;
         Motion_Get_Speed(&car);
 
         float vx = car.Vx;     
         float wz = car.Wz;     
 
-        // 四轮差速模型的里程计积分公式与两轮完全一致
+        // 差速模型的里程计积分
         odom_theta += wz * dt;
 
         float cos_t = cosf(odom_theta);
