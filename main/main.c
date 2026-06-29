@@ -23,9 +23,11 @@
 
 #include "geometry_msgs/msg/twist.h"
 #include "rcl_interfaces/msg/log.h" 
-#include "nav_msgs/msg/odometry.h" 
+#include "nav_msgs/msg/odometry.h"
+#include <sensor_msgs/msg/imu.h>
 
 #include "car_motion.h"
+#include "icm42670p.h"
 
 // ================================================================= //
 // ==================== 用户需要修改的配置 ======================== //
@@ -62,6 +64,9 @@ rcl_interfaces__msg__Log log_msg;
 
 rcl_publisher_t odom_publisher;
 nav_msgs__msg__Odometry odom_msg;
+
+rcl_publisher_t imu_publisher;
+sensor_msgs__msg__Imu imu_msg;
 
 static float odom_x = 0.0f;
 static float odom_y = 0.0f;
@@ -182,6 +187,38 @@ void micro_ros_task(void *arg)
             strncpy(odom_msg.child_frame_id.data, "base_link", odom_msg.child_frame_id.capacity - 1);
             odom_msg.child_frame_id.size = strlen(odom_msg.child_frame_id.data);
 
+            // odom 协方差矩阵 (EKF 强制要求非零)
+            static double odom_pose_cov[36] = {0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01};
+            static double odom_twist_cov[36] = {0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01};
+            odom_msg.pose.covariance = odom_pose_cov;
+            odom_msg.pose.covariance_size = 36;
+            odom_msg.twist.covariance = odom_twist_cov;
+            odom_msg.twist.covariance_size = 36;
+
+            // 初始化 /imu publisher
+            if (rclc_publisher_init_default(
+                    &imu_publisher,
+                    &node,
+                    ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
+                    "/imu") != RCL_RET_OK) break;
+
+            static char imu_frame_id[16];
+            imu_msg.header.frame_id.data = imu_frame_id;
+            imu_msg.header.frame_id.capacity = sizeof(imu_frame_id);
+            strncpy(imu_msg.header.frame_id.data, "imu_link", imu_msg.header.frame_id.capacity - 1);
+            imu_msg.header.frame_id.size = strlen(imu_msg.header.frame_id.data);
+
+            // IMU 协方差矩阵 (EKF 强制要求非零)
+            static double imu_orient_cov[9] = {0.001, 0, 0, 0, 0.001, 0, 0, 0, 0.001};
+            static double imu_gyro_cov[9]  = {0.001, 0, 0, 0, 0.001, 0, 0, 0, 0.001};
+            static double imu_accel_cov[9] = {0.01, 0, 0, 0, 0.01, 0, 0, 0, 0.01};
+            imu_msg.orientation_covariance = imu_orient_cov;
+            imu_msg.orientation_covariance_size = 9;
+            imu_msg.angular_velocity_covariance = imu_gyro_cov;
+            imu_msg.angular_velocity_covariance_size = 9;
+            imu_msg.linear_acceleration_covariance = imu_accel_cov;
+            imu_msg.linear_acceleration_covariance_size = 9;
+
             if (rclc_executor_init(&executor, &support.context, 2, &allocator) != RCL_RET_OK) break;
             
             if (rclc_executor_add_subscription(&executor, &subscriber, &msg, &cmd_vel_subscription_callback, ON_NEW_DATA) != RCL_RET_OK) break;
@@ -199,6 +236,7 @@ void micro_ros_task(void *arg)
         RCSOFTCHECK(rclc_executor_fini(&executor));
         RCSOFTCHECK(rcl_publisher_fini(&log_publisher, &node));
         RCSOFTCHECK(rcl_publisher_fini(&odom_publisher, &node));
+        RCSOFTCHECK(rcl_publisher_fini(&imu_publisher, &node));
         RCSOFTCHECK(rcl_subscription_fini(&subscriber, &node));
         RCSOFTCHECK(rcl_node_fini(&node));
         RCSOFTCHECK(rclc_support_fini(&support));
@@ -272,6 +310,27 @@ void micro_ros_task(void *arg)
 
         RCSOFTCHECK(rcl_publish(&odom_publisher, &odom_msg, NULL));
 
+        // -------------------- IMU 数据发布 --------------------
+        if (Icm42670p_Start_OK() > 0)
+        {
+            float gyro_dps[3], accel_g[3];
+            Icm42670p_Get_Gyro_dps(gyro_dps);
+            Icm42670p_Get_Accel_g(accel_g);
+
+            imu_msg.header.stamp.sec = odom_msg.header.stamp.sec;
+            imu_msg.header.stamp.nanosec = odom_msg.header.stamp.nanosec;
+
+            imu_msg.angular_velocity.x = gyro_dps[0];
+            imu_msg.angular_velocity.y = gyro_dps[1];
+            imu_msg.angular_velocity.z = gyro_dps[2];
+
+            imu_msg.linear_acceleration.x = accel_g[0];
+            imu_msg.linear_acceleration.y = accel_g[1];
+            imu_msg.linear_acceleration.z = accel_g[2];
+
+            RCSOFTCHECK(rcl_publish(&imu_publisher, &imu_msg, NULL));
+        }
+
         // ------------------ /cmd_vel 看门狗 -------------------
         const int64_t CMD_VEL_TIMEOUT_US = 100000; 
         if (last_cmd_time_us != 0) {
@@ -335,6 +394,10 @@ void app_main(void)
     ESP_LOGI(TAG, "正在初始化小车硬件...");
     Motion_Init();
     ESP_LOGI(TAG, "小车硬件初始化完成.");
+
+    ESP_LOGI(TAG, "正在初始化IMU...");
+    Icm42670p_Init();
+    ESP_LOGI(TAG, "IMU初始化完成.");
 
     ESP_LOGI(TAG, "正在连接WiFi...");
     wifi_init_sta();
