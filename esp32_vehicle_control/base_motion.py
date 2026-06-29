@@ -38,7 +38,7 @@ class BaseMotionNode(Node):
 
     def __init__(self,
                  cmd_vel_topic: str = '/cmd_vel',
-                 odom_topic: str = '/odom'):
+                 odom_topic: str = '/odom_filtered'):
         super().__init__('esp32_base_motion')
 
         # 发布速度命令
