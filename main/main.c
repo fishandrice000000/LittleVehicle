@@ -343,8 +343,9 @@ void micro_ros_task(void *arg)
         usleep(10000); 
     }
 
-    RCCHECK(rcl_publisher_fini(&log_publisher, &node)); 
+    RCCHECK(rcl_publisher_fini(&log_publisher, &node));
     RCCHECK(rcl_publisher_fini(&odom_publisher, &node));
+    RCCHECK(rcl_publisher_fini(&imu_publisher, &node));
     RCCHECK(rcl_subscription_fini(&subscriber, &node));
     RCCHECK(rcl_node_fini(&node));
     RCCHECK(rclc_executor_fini(&executor));
