@@ -1,0 +1,31 @@
+### ekf.yaml — EKF 融合 /odom + /imu → /odom_filtered
+
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0
+
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # 传感器 0: 编码器里程计 /odom
+    odom0: /odom
+    odom0_config:
+      [true,  true,  false,   # x, y, z
+       false, false, false,    # roll, pitch, yaw
+       false, false, false,   # vx, vy, vz
+       false, false, false,   # vroll, vpitch, vyaw
+       false, false, false]   # ax, ay, az
+    odom0_differential: false
+
+    # 传感器 1: IMU /imu
+    imu0: /imu
+    imu0_config:
+      [false, false, false,   # x, y, z
+       false, false, false,   # roll, pitch, yaw
+       false, false, false,   # vx, vy, vz
+       false, false, true,    # vroll, vpitch, vyaw  ← 关键: IMU 角速度修正 yaw
+       false, false, false]   # ax, ay, az
+    imu0_differential: false
+
+    publish_tf: true
