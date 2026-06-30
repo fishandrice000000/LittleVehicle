@@ -188,12 +188,12 @@ void micro_ros_task(void *arg)
             odom_msg.child_frame_id.size = strlen(odom_msg.child_frame_id.data);
 
             // odom 协方差矩阵 (EKF 强制要求非零)
-            static double odom_pose_cov[36] = {0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01};
-            static double odom_twist_cov[36] = {0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01, 0, 0, 0, 0, 0, 0, 0.01};
-            odom_msg.pose.covariance = odom_pose_cov;
-            odom_msg.pose.covariance_size = 36;
-            odom_msg.twist.covariance = odom_twist_cov;
-            odom_msg.twist.covariance_size = 36;
+            memset(odom_msg.pose.covariance, 0, sizeof(odom_msg.pose.covariance));
+            memset(odom_msg.twist.covariance, 0, sizeof(odom_msg.twist.covariance));
+            for (int i = 0; i < 6; i++) {
+                odom_msg.pose.covariance[i*6+i] = 0.01;
+                odom_msg.twist.covariance[i*6+i] = 0.01;
+            }
 
             // 初始化 /imu publisher
             if (rclc_publisher_init_default(
@@ -209,15 +209,14 @@ void micro_ros_task(void *arg)
             imu_msg.header.frame_id.size = strlen(imu_msg.header.frame_id.data);
 
             // IMU 协方差矩阵 (EKF 强制要求非零)
-            static double imu_orient_cov[9] = {0.001, 0, 0, 0, 0.001, 0, 0, 0, 0.001};
-            static double imu_gyro_cov[9]  = {0.001, 0, 0, 0, 0.001, 0, 0, 0, 0.001};
-            static double imu_accel_cov[9] = {0.01, 0, 0, 0, 0.01, 0, 0, 0, 0.01};
-            imu_msg.orientation_covariance = imu_orient_cov;
-            imu_msg.orientation_covariance_size = 9;
-            imu_msg.angular_velocity_covariance = imu_gyro_cov;
-            imu_msg.angular_velocity_covariance_size = 9;
-            imu_msg.linear_acceleration_covariance = imu_accel_cov;
-            imu_msg.linear_acceleration_covariance_size = 9;
+            memset(imu_msg.orientation_covariance, 0, sizeof(imu_msg.orientation_covariance));
+            memset(imu_msg.angular_velocity_covariance, 0, sizeof(imu_msg.angular_velocity_covariance));
+            memset(imu_msg.linear_acceleration_covariance, 0, sizeof(imu_msg.linear_acceleration_covariance));
+            for (int i = 0; i < 3; i++) {
+                imu_msg.orientation_covariance[i*3+i] = 0.001;
+                imu_msg.angular_velocity_covariance[i*3+i] = 0.001;
+                imu_msg.linear_acceleration_covariance[i*3+i] = 0.01;
+            }
 
             if (rclc_executor_init(&executor, &support.context, 2, &allocator) != RCL_RET_OK) break;
             
