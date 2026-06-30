@@ -5,7 +5,5 @@ logs/
 *.log
 sdkconfig
 sdkconfig.old
-
 # Keep local-only directories out of the repo
-/LittleVehicle
 /ignore
