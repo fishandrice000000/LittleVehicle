@@ -15,7 +15,7 @@ extern "C" {
 
 // 小车上下轮子、左右轮子间距和的一半。
 // Half of the distance between the upper and lower wheels and the left and right wheels of the car.
-#define ROBOT_APB                    (0.156f)
+#define ROBOT_APB                    (0.115f)
 
 
 #define ROBOT_SPIN_SCALE             (5.0f)
