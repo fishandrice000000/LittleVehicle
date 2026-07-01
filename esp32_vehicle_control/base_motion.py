@@ -7,6 +7,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Imu
 
 
 def yaw_from_quat(x: float, y: float, z: float, w: float) -> float:
@@ -25,8 +26,8 @@ class BaseMotionNode(Node):
     提供的主要接口：
       - wait_for_odom(): 等待 /odom 准备好
       - move_for(vx, wz, duration): 以给定线速度/角速度跑一段时间（不依赖里程计）
-      - move_distance(distance, speed): 走指定距离（依赖 /odom）
-      - rotate_angle(angle_rad, angular_speed): 转指定角度（依赖 /odom）
+      - move_distance(distance, speed): 走指定距离（依赖 /odom 位置）
+      - rotate_angle(angle_rad, angular_speed): 转指定角度（依赖 /imu gyro 积分）
       - follow_waypoints(waypoints): 按序列点依次走（简单版本）
 
     使用方式（示例）：
@@ -38,23 +39,38 @@ class BaseMotionNode(Node):
 
     def __init__(self,
                  cmd_vel_topic: str = '/cmd_vel',
-                 odom_topic: str = '/odom_filtered'):
+                 odom_topic: str = '/odom'):
         super().__init__('esp32_base_motion')
 
         # 发布速度命令
         self.cmd_pub = self.create_publisher(Twist, cmd_vel_topic, 10)
 
-        # 订阅里程计
+        # 订阅里程计 (用于位置控制)
         self.odom_sub = self.create_subscription(
             Odometry, odom_topic, self._odom_callback, 10
         )
 
+        # 订阅 IMU (用于朝向控制)
+        self.imu_sub = self.create_subscription(
+            Imu, '/imu', self._imu_callback, 10
+        )
+
         self._last_odom: Optional[Odometry] = None
+        self._imu_yaw = 0.0          # IMU gyro 积分累积 yaw
+        self._imu_last_time = None   # 上帧 IMU 时间戳
 
     # ========== 基础工具函数 ==========
 
     def _odom_callback(self, msg: Odometry):
         self._last_odom = msg
+
+    def _imu_callback(self, msg: Imu):
+        now = time.time()
+        if self._imu_last_time is not None:
+            dt = now - self._imu_last_time
+            if dt < 0.5:  # 忽略长时间无数据的间隔
+                self._imu_yaw += msg.angular_velocity.z * dt
+        self._imu_last_time = now
 
     def _wait_for_odom(self, timeout_sec: float = 5.0) -> bool:
         """
@@ -220,7 +236,7 @@ class BaseMotionNode(Node):
         self.stop()
         self.get_logger().info('[move_distance] done, stop sent')
 
-    # ========== 高层 API 3：原地旋转（依赖里程计） ==========
+    # ========== 高层 API 3：原地旋转（依赖 IMU gyro 积分） ==========
 
     def rotate_angle(self,
                      angle_rad: float,
@@ -228,25 +244,11 @@ class BaseMotionNode(Node):
                      rate_hz: float = 50.0,
                      wait_odom: bool = True):
         """
-        原地旋转指定角度（rad），基于 /odom 闭环。
-
-        使用逐帧累积转角法：将每帧 yaw 的增量（已解 wrap）累加，
-        不受 yaw 在 ±π 处折叠的影响，支持任意角度（包括 ≥180°）。
+        原地旋转指定角度（rad），基于 /imu gyro z 积分闭环。
 
         angle_rad > 0: 左转；angle_rad < 0: 右转。
         angular_speed: 角速度大小（rad/s），符号由 angle_rad 决定。
         """
-        if wait_odom and not self._wait_for_odom(timeout_sec=5.0):
-            self.get_logger().error('[rotate_angle] No odom received, abort')
-            return
-
-        if self._last_odom is None:
-            self.get_logger().error('[rotate_angle] No odom at all, abort')
-            return
-
-        q = self._last_odom.pose.pose.orientation
-        prev_yaw = yaw_from_quat(q.x, q.y, q.z, q.w)
-
         direction = 1.0 if angle_rad >= 0.0 else -1.0
         speed = abs(angular_speed) * direction
         target_angle = abs(angle_rad)
@@ -257,32 +259,17 @@ class BaseMotionNode(Node):
         max_duration = max(10.0, 2.0 * target_angle / (abs(speed) + 1e-6))
         start_time = time.time()
 
+        # 记录起点 IMU yaw
+        start_yaw = self._imu_yaw
+
         self.get_logger().info(
             f'[rotate_angle] angle={angle_rad:.3f}rad ({math.degrees(angle_rad):.1f}°), '
             f'wz={speed:.3f}rad/s'
         )
 
-        accumulated = 0.0
-
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=dt)
-            if self._last_odom is None:
-                time.sleep(dt)
-                continue
-
-            q = self._last_odom.pose.pose.orientation
-            cur_yaw = yaw_from_quat(q.x, q.y, q.z, q.w)
-
-            # 计算帧间 yaw 增量，解 ±π 折叠
-            delta = cur_yaw - prev_yaw
-            if delta > math.pi:
-                delta -= 2.0 * math.pi
-            elif delta < -math.pi:
-                delta += 2.0 * math.pi
-
-            # 带符号累积: 朝目标方向的旋转计为正，反向震荡自动抵消
-            accumulated += delta * direction
-            prev_yaw = cur_yaw
+            accumulated = abs(self._imu_yaw - start_yaw)
 
             if accumulated >= target_angle:
                 break
