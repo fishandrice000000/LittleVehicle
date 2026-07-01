@@ -250,13 +250,16 @@ class BaseMotionNode(Node):
         angular_speed: 角速度大小（rad/s），符号由 angle_rad 决定。
         """
         direction = 1.0 if angle_rad >= 0.0 else -1.0
-        speed = abs(angular_speed) * direction
+        max_speed = abs(angular_speed)
         target_angle = abs(angle_rad)
+
+        DECEL_ANGLE = math.radians(30.0)  # 距目标 30° 开始减速
+        MIN_SPEED   = 0.3                # 最低角速度
 
         dt = 1.0 / rate_hz
 
         # 安全超时: max(10s, 2×理论最短时间)
-        max_duration = max(10.0, 2.0 * target_angle / (abs(speed) + 1e-6))
+        max_duration = max(10.0, 2.0 * target_angle / (max_speed + 1e-6))
         start_time = time.time()
 
         # 记录起点 IMU yaw
@@ -264,7 +267,7 @@ class BaseMotionNode(Node):
 
         self.get_logger().info(
             f'[rotate_angle] angle={angle_rad:.3f}rad ({math.degrees(angle_rad):.1f}°), '
-            f'wz={speed:.3f}rad/s'
+            f'max_wz={max_speed:.3f}rad/s'
         )
 
         while rclpy.ok():
@@ -283,7 +286,14 @@ class BaseMotionNode(Node):
                 )
                 break
 
-            self._publish_twist(0.0, speed)
+            # 接近目标时减速
+            remaining = target_angle - accumulated
+            if remaining < DECEL_ANGLE:
+                cmd_speed = max(MIN_SPEED, max_speed * (remaining / DECEL_ANGLE))
+            else:
+                cmd_speed = max_speed
+
+            self._publish_twist(0.0, cmd_speed * direction)
             time.sleep(dt)
 
         self.stop()
@@ -395,13 +405,17 @@ class BaseMotionNode(Node):
 
         dt = 1.0 / rate_hz
         target_arc = abs(distance)
+        abs_radius = abs(radius)
+
+        # 距目标 30° 转角对应的弧长开始减速
+        DECEL_ARC = math.radians(30.0) * abs_radius
+        MIN_LIN_SPEED = 0.05   # 最低线速度
 
         # 保险起见，加一个超时：按理论时间 * 2
         max_time = 2.0 * target_arc / (abs(vx_cmd) + 1e-3)
         start_time = time.time()
 
         # 用 IMU gyro 积分追踪转角 → 弧长 = 转角 × 半径
-        abs_radius = abs(radius)
         start_yaw = self._imu_yaw
 
         self.get_logger().info(
@@ -425,7 +439,15 @@ class BaseMotionNode(Node):
                 )
                 break
 
-            self._publish_twist(vx_cmd, wz_cmd)
+            # 接近目标时减速
+            remaining = target_arc - traveled_arc
+            if remaining < DECEL_ARC:
+                scale = max(MIN_LIN_SPEED / (abs(vx_cmd) + 1e-6),
+                            remaining / DECEL_ARC)
+            else:
+                scale = 1.0
+
+            self._publish_twist(vx_cmd * scale, wz_cmd * scale)
             time.sleep(dt)
 
         self.stop()
