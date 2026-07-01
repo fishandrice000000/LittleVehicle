@@ -80,6 +80,12 @@ static float         cmd_vx = 0.0f, cmd_wz = 0.0f; // 最新 /cmd_vel 目标
 static float         gyro_z_bias_global = 0.0f;     // IMU 零偏（校准时写入）
 static pid_ctrl_block_handle_t wz_pid = NULL;       // 角速度 PID 句柄
 
+// 跨任务诊断数据（wz_pid_task 写，micro_ros_task 读）
+static float         diag_vx_out = 0.0f, diag_wz_out = 0.0f;
+static float         diag_actual_wz = 0.0f;
+static int           diag_watchdog_hit = 0;
+static int64_t       diag_idle_ms = 0;
+
 void publish_log(uint8_t level, const char *file, const char *function, int line, const char *name, const char *format, ...)
 {
     if (!rcl_node_is_valid(&node)) {
@@ -135,10 +141,8 @@ void cmd_vel_subscription_callback(const void *msgin)
 // ============================================================================
 static void wz_pid_task(void *arg)
 {
-    PUBLISH_LOG_INFO("wz_pid", "wz_pid_task started (20Hz)");
     TickType_t last_wake = xTaskGetTickCount();
     float last_vx = 0.0f, last_wz = 0.0f;
-    int tick = 0;
 
     while (1) {
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(50));  // 20Hz
@@ -147,7 +151,7 @@ static void wz_pid_task(void *arg)
 
         // 看门狗: 100ms 没收到 /cmd_vel → 刹车
         if (last_cmd_time_us != 0 && (now - last_cmd_time_us) > 100000) {
-            PUBLISH_LOG_INFO("wz_pid", "WATCHDOG stop (no /cmd_vel for %lld us)", now - last_cmd_time_us);
+            diag_watchdog_hit = 1;
             Motion_Stop(STOP_BRAKE);
             cmd_vx = 0.0f;
             cmd_wz = 0.0f;
@@ -155,6 +159,7 @@ static void wz_pid_task(void *arg)
             last_wz = 0.0f;
             continue;
         }
+        diag_watchdog_hit = 0;
 
         float vx_out = cmd_vx;
         float wz_out = cmd_wz;
@@ -168,6 +173,9 @@ static void wz_pid_task(void *arg)
             float pid_out = 0.0f;
             pid_compute(wz_pid, error, &pid_out);
             wz_out += pid_out;
+            diag_actual_wz = actual_wz;
+        } else {
+            diag_actual_wz = 0.0f;
         }
 
         // 只在目标变化或 PID 修正时才调用 Motion_Ctrl
@@ -177,14 +185,10 @@ static void wz_pid_task(void *arg)
             last_wz = wz_out;
         }
 
-        // 每 250ms 无线打印一次状态
-        tick++;
-        if (tick % 5 == 0) {
-            PUBLISH_LOG_INFO("wz_pid",
-                "cmd(vx=%.3f wz=%.3f) out(vx=%.3f wz=%.3f) idle=%lldms",
-                cmd_vx, cmd_wz, vx_out, wz_out,
-                last_cmd_time_us ? (now - last_cmd_time_us) / 1000 : -1);
-        }
+        // 写入诊断数据（micro_ros_task 主循环读取并发布）
+        diag_vx_out = vx_out;
+        diag_wz_out = wz_out;
+        diag_idle_ms = last_cmd_time_us ? (now - last_cmd_time_us) / 1000 : -1;
     }
 
     vTaskDelete(NULL);
@@ -429,7 +433,21 @@ void micro_ros_task(void *arg)
             RCSOFTCHECK(rcl_publish(&imu_publisher, &imu_msg, NULL));
         }
 
-        usleep(10000); 
+        // ------ wz_pid 诊断日志 (安全: 在 micro_ros_task 上下文) ------
+        {
+            static int diag_tick = 0;
+            diag_tick++;
+            if (diag_tick >= 40) {  // ~400ms 一次 (主循环约 10ms)
+                diag_tick = 0;
+                PUBLISH_LOG_INFO(rcl_node_get_name(&node),
+                    "wz_pid: cmd(vx=%.2f wz=%.2f) out(vx=%.2f wz=%.2f) "
+                    "actual_wz=%.3f idle=%lldms wdog=%d",
+                    cmd_vx, cmd_wz, diag_vx_out, diag_wz_out,
+                    diag_actual_wz, diag_idle_ms, diag_watchdog_hit);
+            }
+        }
+
+        usleep(10000);
     }
 
     RCCHECK(rcl_publisher_fini(&log_publisher, &node));
