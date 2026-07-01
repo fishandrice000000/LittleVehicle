@@ -72,15 +72,15 @@ static void Motor_PID_Ctrl(void)
             new_pid_output[i] = new_speed[i];
         }
     }
-        // ===== 新增：编码器数据串口打印调试 =====
+    #if 0  // 编码器调试打印 (已禁用)
     static int print_cnt = 0;
     print_cnt++;
-    // 假设 MOTOR_PID_PERIOD 是 10ms，50次就是 500ms 打印一次，避免刷屏
-    if (print_cnt >= 1) { 
+    if (print_cnt >= 50) {
         print_cnt = 0;
-        ESP_LOGI("ENC_DEBUG", "M1_pulse: %6.1f | M2_pulse: %6.1f | M3_pulse: %6.1f | M4_pulse: %6.1f", 
+        ESP_LOGI("ENC_DEBUG", "M1_pulse: %6.1f | M2_pulse: %6.1f | M3_pulse: %6.1f | M4_pulse: %6.1f",
                  real_pulse[0], real_pulse[1], real_pulse[2], real_pulse[3]);
     }
+    #endif
 }
 
 
