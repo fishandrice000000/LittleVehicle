@@ -137,9 +137,10 @@ static void wz_pid_task(void *arg)
 {
     ESP_LOGI(TAG, "wz_pid_task started.");
     TickType_t last_wake = xTaskGetTickCount();
+    float last_vx = 0.0f, last_wz = 0.0f;
 
     while (1) {
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(10));  // 100Hz
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(50));  // 20Hz
 
         int64_t now = esp_timer_get_time();
 
@@ -148,6 +149,8 @@ static void wz_pid_task(void *arg)
             Motion_Stop(STOP_BRAKE);
             cmd_vx = 0.0f;
             cmd_wz = 0.0f;
+            last_vx = 0.0f;
+            last_wz = 0.0f;
             continue;
         }
 
@@ -165,7 +168,12 @@ static void wz_pid_task(void *arg)
             wz_out += pid_out;
         }
 
-        Motion_Ctrl(vx_out, 0, wz_out);
+        // 只在目标变化或 PID 修正时才调用 Motion_Ctrl
+        if (vx_out != last_vx || wz_out != last_wz) {
+            Motion_Ctrl(vx_out, 0, wz_out);
+            last_vx = vx_out;
+            last_wz = wz_out;
+        }
     }
 
     vTaskDelete(NULL);
