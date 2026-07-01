@@ -135,9 +135,10 @@ void cmd_vel_subscription_callback(const void *msgin)
 // ============================================================================
 static void wz_pid_task(void *arg)
 {
-    ESP_LOGI(TAG, "wz_pid_task started.");
+    PUBLISH_LOG_INFO("wz_pid", "wz_pid_task started (20Hz)");
     TickType_t last_wake = xTaskGetTickCount();
     float last_vx = 0.0f, last_wz = 0.0f;
+    int tick = 0;
 
     while (1) {
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(50));  // 20Hz
@@ -146,6 +147,7 @@ static void wz_pid_task(void *arg)
 
         // 看门狗: 100ms 没收到 /cmd_vel → 刹车
         if (last_cmd_time_us != 0 && (now - last_cmd_time_us) > 100000) {
+            PUBLISH_LOG_INFO("wz_pid", "WATCHDOG stop (no /cmd_vel for %lld us)", now - last_cmd_time_us);
             Motion_Stop(STOP_BRAKE);
             cmd_vx = 0.0f;
             cmd_wz = 0.0f;
@@ -173,6 +175,15 @@ static void wz_pid_task(void *arg)
             Motion_Ctrl(vx_out, 0, wz_out);
             last_vx = vx_out;
             last_wz = wz_out;
+        }
+
+        // 每 250ms 无线打印一次状态
+        tick++;
+        if (tick % 5 == 0) {
+            PUBLISH_LOG_INFO("wz_pid",
+                "cmd(vx=%.3f wz=%.3f) out(vx=%.3f wz=%.3f) idle=%lldms",
+                cmd_vx, cmd_wz, vx_out, wz_out,
+                last_cmd_time_us ? (now - last_cmd_time_us) / 1000 : -1);
         }
     }
 
