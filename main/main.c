@@ -145,7 +145,7 @@ static void wz_pid_task(void *arg)
     float last_vx = 0.0f, last_wz = 0.0f;
 
     while (1) {
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(50));  // 20Hz
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(10));  // 100Hz
 
         int64_t now = esp_timer_get_time();
 
@@ -437,7 +437,7 @@ void micro_ros_task(void *arg)
         {
             static int diag_tick = 0;
             diag_tick++;
-            if (diag_tick >= 40) {  // ~400ms 一次 (主循环约 10ms)
+            if (diag_tick >= 2) {  // 10Hz
                 diag_tick = 0;
                 PUBLISH_LOG_INFO(rcl_node_get_name(&node),
                     "wz_pid: cmd(vx=%.2f wz=%.2f) out(vx=%.2f wz=%.2f) "
