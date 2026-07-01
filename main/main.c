@@ -250,6 +250,26 @@ void micro_ros_task(void *arg)
     
     PUBLISH_LOG_INFO(rcl_node_get_name(&node), "节点已创建，执行器已启动。");
 
+    // ===== IMU 陀螺仪零偏校准 (小车此时应当静止) =====
+    float gyro_z_bias = 0.0f;
+    {
+        int calib_samples = 0;
+        ESP_LOGI(TAG, "正在校准陀螺仪零偏，请保持小车静止...");
+        while (Icm42670p_Start_OK() <= 0) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        float gyro_dps[3];
+        for (int i = 0; i < 200; i++) {
+            Icm42670p_Get_Gyro_dps(gyro_dps);
+            gyro_z_bias += gyro_dps[2];
+            calib_samples++;
+            usleep(10000);  // 10ms × 200 = 2s
+        }
+        gyro_z_bias /= (float)calib_samples;
+        ESP_LOGI(TAG, "陀螺仪 Z 轴零偏: %.4f rad/s (%.2f °/s)",
+                 gyro_z_bias, gyro_z_bias * 180.0f / M_PI);
+    }
+
     int64_t last_odom_time_us = esp_timer_get_time();
 
     while (1)
@@ -321,7 +341,7 @@ void micro_ros_task(void *arg)
 
             imu_msg.angular_velocity.x = gyro_dps[0];
             imu_msg.angular_velocity.y = gyro_dps[1];
-            imu_msg.angular_velocity.z = gyro_dps[2];
+            imu_msg.angular_velocity.z = gyro_dps[2] - gyro_z_bias;
 
             imu_msg.linear_acceleration.x = accel_g[0];
             imu_msg.linear_acceleration.y = accel_g[1];
