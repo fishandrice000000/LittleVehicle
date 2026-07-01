@@ -395,39 +395,25 @@ class BaseMotionNode(Node):
 
         dt = 1.0 / rate_hz
         target_arc = abs(distance)
-        traveled_arc = 0.0
-
-        # 用当前位姿作为“上一点”，后续每次累加两次 odom 之间的直线间距来近似弧长
-        last_pose = self._last_odom.pose.pose.position
-        last_x = last_pose.x
-        last_y = last_pose.y
 
         # 保险起见，加一个超时：按理论时间 * 2
         max_time = 2.0 * target_arc / (abs(vx_cmd) + 1e-3)
         start_time = time.time()
 
+        # 用 IMU gyro 积分追踪转角 → 弧长 = 转角 × 半径
+        abs_radius = abs(radius)
+        start_yaw = self._imu_yaw
+
         self.get_logger().info(
             f'[move_arc] radius={radius:.3f}m, distance={distance:.3f}m, '
-            f'vx={vx_cmd:.3f}m/s, wz={wz_cmd:.3f}rad/s'
+            f'vx={vx_cmd:.3f}m/s, wz={wz_cmd:.3f}rad/s (IMU)'
         )
 
         while rclpy.ok():
             rclpy.spin_once(self, timeout_sec=0.0)
 
-            if self._last_odom is None:
-                self.get_logger().warn('[move_arc] no odom yet, keep waiting')
-                time.sleep(dt)
-                continue
-
-            cur_pose = self._last_odom.pose.pose.position
-            cur_x = cur_pose.x
-            cur_y = cur_pose.y
-
-            # 增量位移，当做弧长的小段
-            ds = math.hypot(cur_x - last_x, cur_y - last_y)
-            traveled_arc += ds
-
-            last_x, last_y = cur_x, cur_y
+            # 已转过的角度 × 半径 = 已走过的弧长
+            traveled_arc = abs(self._imu_yaw - start_yaw) * abs_radius
 
             if traveled_arc >= target_arc:
                 break
