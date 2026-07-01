@@ -28,6 +28,7 @@
 
 #include "car_motion.h"
 #include "icm42670p.h"
+#include "pid_ctrl.h"
 
 // ================================================================= //
 // ==================== 用户需要修改的配置 ======================== //
@@ -74,6 +75,11 @@ static float odom_theta = 0.0f;
 
 static int64_t last_cmd_time_us = 0;
 
+// ===== 角速度 PID 控制变量 =====
+static float         cmd_vx = 0.0f, cmd_wz = 0.0f; // 最新 /cmd_vel 目标
+static float         gyro_z_bias_global = 0.0f;     // IMU 零偏（校准时写入）
+static pid_ctrl_block_handle_t wz_pid = NULL;       // 角速度 PID 句柄
+
 void publish_log(uint8_t level, const char *file, const char *function, int line, const char *name, const char *format, ...)
 {
     if (!rcl_node_is_valid(&node)) {
@@ -111,17 +117,58 @@ void publish_log(uint8_t level, const char *file, const char *function, int line
 void cmd_vel_subscription_callback(const void *msgin)
 {
     const geometry_msgs__msg__Twist *twist_msg = (const geometry_msgs__msg__Twist *)msgin;
-    
-    float linear_velocity_x = twist_msg->linear.x;
-    float angular_velocity_z = twist_msg->angular.z;
 
-    PUBLISH_LOG_INFO(rcl_node_get_name(&node), "接收到速度指令 Vx: %.2f, Wz: %.2f", linear_velocity_x, angular_velocity_z);
-
+    cmd_vx = twist_msg->linear.x;
+    cmd_wz = twist_msg->angular.z;
     last_cmd_time_us = esp_timer_get_time();
 
-    // 四轮差速驱动: ROS层接口不变
-    // 底层 car_motion.c 负责将速度分配给四个电机 (M1+M2左侧, M3+M4右侧)
-    Motion_Ctrl(linear_velocity_x, 0, angular_velocity_z);
+    PUBLISH_LOG_INFO(rcl_node_get_name(&node), "收到速度指令 Vx: %.2f, Wz: %.2f", cmd_vx, cmd_wz);
+}
+
+// ============================================================================
+// 角速度 PID 控制任务 (100Hz, 独立 FreeRTOS 任务)
+// ============================================================================
+// 参照 motor.c 中 Motor_Task 的模式:
+//   - vTaskDelayUntil 严格 100Hz
+//   - 看门狗超时 → Motion_Stop
+//   - 用 IMU gyro z 做反馈, PID 修正 Wz 后再调 Motion_Ctrl
+// ============================================================================
+static void wz_pid_task(void *arg)
+{
+    ESP_LOGI(TAG, "wz_pid_task started.");
+    TickType_t last_wake = xTaskGetTickCount();
+
+    while (1) {
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(10));  // 100Hz
+
+        int64_t now = esp_timer_get_time();
+
+        // 看门狗: 100ms 没收到 /cmd_vel → 刹车
+        if (last_cmd_time_us != 0 && (now - last_cmd_time_us) > 100000) {
+            Motion_Stop(STOP_BRAKE);
+            cmd_vx = 0.0f;
+            cmd_wz = 0.0f;
+            continue;
+        }
+
+        float vx_out = cmd_vx;
+        float wz_out = cmd_wz;
+
+        // 角速度 PID: 旋转时用 IMU 反馈修正
+        if (cmd_wz != 0.0f && wz_pid != NULL && Icm42670p_Start_OK() > 0) {
+            float gyro[3];
+            Icm42670p_Get_Gyro_dps(gyro);
+            float actual_wz = gyro[2] - gyro_z_bias_global;
+            float error = cmd_wz - actual_wz;
+            float pid_out = 0.0f;
+            pid_compute(wz_pid, error, &pid_out);
+            wz_out += pid_out;
+        }
+
+        Motion_Ctrl(vx_out, 0, wz_out);
+    }
+
+    vTaskDelete(NULL);
 }
 
 void micro_ros_task(void *arg)
@@ -251,7 +298,6 @@ void micro_ros_task(void *arg)
     PUBLISH_LOG_INFO(rcl_node_get_name(&node), "节点已创建，执行器已启动。");
 
     // ===== IMU 陀螺仪零偏校准 (小车此时应当静止) =====
-    float gyro_z_bias = 0.0f;
     {
         int calib_samples = 0;
         ESP_LOGI(TAG, "正在校准陀螺仪零偏，请保持小车静止...");
@@ -261,13 +307,27 @@ void micro_ros_task(void *arg)
         float gyro_dps[3];
         for (int i = 0; i < 200; i++) {
             Icm42670p_Get_Gyro_dps(gyro_dps);
-            gyro_z_bias += gyro_dps[2];
+            gyro_z_bias_global += gyro_dps[2];
             calib_samples++;
-            usleep(10000);  // 10ms × 200 = 2s
+            usleep(10000);
         }
-        gyro_z_bias /= (float)calib_samples;
+        gyro_z_bias_global /= (float)calib_samples;
         ESP_LOGI(TAG, "陀螺仪 Z 轴零偏: %.4f rad/s (%.2f °/s)",
-                 gyro_z_bias, gyro_z_bias * 180.0f / M_PI);
+                 gyro_z_bias_global, gyro_z_bias_global * 180.0f / M_PI);
+    }
+
+    // ===== 创建角速度 PID 任务 =====
+    {
+        pid_ctrl_parameter_t wz_pid_param = {
+            .kp = 0.5, .ki = 0.05, .kd = 0.0,
+            .max_output = 2.0, .min_output = -2.0,
+            .max_integral = 1.0, .min_integral = -1.0,
+            .cal_type = PID_CAL_TYPE_INCREMENTAL,
+        };
+        pid_ctrl_config_t wz_pid_cfg = { .init_param = wz_pid_param };
+        pid_new_control_block(&wz_pid_cfg, &wz_pid);
+        xTaskCreate(wz_pid_task, "wz_pid_task", 4*1024, NULL, 5, NULL);
+        ESP_LOGI(TAG, "角速度 PID 任务已创建.");
     }
 
     int64_t last_odom_time_us = esp_timer_get_time();
@@ -341,22 +401,13 @@ void micro_ros_task(void *arg)
 
             imu_msg.angular_velocity.x = gyro_dps[0];
             imu_msg.angular_velocity.y = gyro_dps[1];
-            imu_msg.angular_velocity.z = gyro_dps[2] - gyro_z_bias;
+            imu_msg.angular_velocity.z = gyro_dps[2] - gyro_z_bias_global;
 
             imu_msg.linear_acceleration.x = accel_g[0];
             imu_msg.linear_acceleration.y = accel_g[1];
             imu_msg.linear_acceleration.z = accel_g[2];
 
             RCSOFTCHECK(rcl_publish(&imu_publisher, &imu_msg, NULL));
-        }
-
-        // ------------------ /cmd_vel 看门狗 -------------------
-        const int64_t CMD_VEL_TIMEOUT_US = 100000; 
-        if (last_cmd_time_us != 0) {
-            int64_t no_cmd_duration = now_us - last_cmd_time_us;
-            if (no_cmd_duration > CMD_VEL_TIMEOUT_US) {
-                Motion_Stop(STOP_BRAKE);
-            }
         }
 
         usleep(10000); 
